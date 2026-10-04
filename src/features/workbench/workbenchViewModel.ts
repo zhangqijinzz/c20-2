@@ -14,6 +14,7 @@ import { clampDeskSize, clampItemDimension } from '../../shared/layoutRules'
 import { moveCanvasItem, rotateCanvasItem } from '../canvas/canvasViewModel'
 import { createMaterialDraft } from '../materials/materialsViewModel'
 import { inspectPlan } from '../inspection/inspectionViewModel'
+import { applyImport, detectConflict, parsePlanFile, serializePlan, type ConflictResolution, type PendingImport } from '../transfer/planTransfer'
 import { LocalWorkspaceRepository, type WorkspaceRepository } from './workspaceRepository'
 
 export interface WorkspaceViewModel {
@@ -26,6 +27,8 @@ export interface WorkspaceViewModel {
   issueCount: number
   feedback: string
   isPreviewOpen: boolean
+  isPrintSheetOpen: boolean
+  pendingImport: PendingImport | null
   selectItem: (id: string | null) => void
   addItem: (type: DeviceType) => void
   removeItem: (id: string) => void
@@ -39,6 +42,12 @@ export interface WorkspaceViewModel {
   deleteCurrentPlan: () => void
   openPreview: () => void
   closePreview: () => void
+  openPrintSheet: () => void
+  closePrintSheet: () => void
+  exportActivePlan: () => void
+  importPlanFile: (file: File) => Promise<void>
+  resolvePendingImport: (resolution: ConflictResolution) => void
+  cancelPendingImport: () => void
 }
 
 const emptyInspection = { analysis: { overlapIds: [], outOfBoundsIds: [], coveragePercent: 0, status: 'clear' as const }, issueIds: [], issueCount: 0 }
@@ -49,6 +58,8 @@ export function useWorkspaceViewModel(repository?: WorkspaceRepository): Workspa
   const [document, setDocument] = useState<WorkspaceDocument | null>(null)
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null)
   const [isPreviewOpen, setIsPreviewOpen] = useState(false)
+  const [isPrintSheetOpen, setIsPrintSheetOpen] = useState(false)
+  const [pendingImport, setPendingImport] = useState<PendingImport | null>(null)
   const [feedback, setFeedback] = useState('正在准备你的工作台…')
 
   useEffect(() => {
@@ -173,6 +184,68 @@ export function useWorkspaceViewModel(repository?: WorkspaceRepository): Workspa
 
   const openPreview = useCallback(() => setIsPreviewOpen(true), [])
   const closePreview = useCallback(() => setIsPreviewOpen(false), [])
+  const openPrintSheet = useCallback(() => setIsPrintSheetOpen(true), [])
+  const closePrintSheet = useCallback(() => setIsPrintSheetOpen(false), [])
+
+  const exportActivePlan = useCallback(() => {
+    if (!activePlan) return
+    const blob = new Blob([serializePlan(activePlan)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const anchor = window.document.createElement('a')
+    anchor.href = url
+    anchor.download = `${activePlan.name.replace(/[\\/:*?"<>|]/g, '_')}.focusdesk.json`
+    anchor.click()
+    URL.revokeObjectURL(url)
+    setFeedback(`已导出「${activePlan.name}」，可发送给同事导入`)
+  }, [activePlan])
+
+  const importPlanFile = useCallback(async (file: File) => {
+    if (!document) return
+    try {
+      const parsed = parsePlanFile(await file.text())
+      if (!parsed.ok) {
+        setFeedback(parsed.error)
+        return
+      }
+      const conflict = detectConflict(parsed.plan, document)
+      if (conflict?.kind === 'identical') {
+        setFeedback('文件中的方案与现有方案完全一致，无需导入')
+        return
+      }
+      if (conflict) {
+        setPendingImport({ plan: parsed.plan, conflict })
+        return
+      }
+      const nextDocument = applyImport(document, parsed.plan, 'auto')
+      setSelectedItemId(null)
+      void persist(nextDocument, `已导入方案「${parsed.plan.name}」`)
+    } catch {
+      setFeedback('导入失败，现有方案保持不变')
+    }
+  }, [document, persist])
+
+  const resolvePendingImport = useCallback((resolution: ConflictResolution) => {
+    if (!document || !pendingImport) return
+    try {
+      const nextDocument = applyImport(document, pendingImport.plan, resolution)
+      setPendingImport(null)
+      setSelectedItemId(null)
+      const messages: Record<ConflictResolution, string> = {
+        merge: `已把设备合并进「${pendingImport.conflict.existingPlanName}」`,
+        overwrite: `已用导入文件覆盖「${pendingImport.conflict.existingPlanName}」`,
+        copy: `已另存为新方案并导入`,
+      }
+      void persist(nextDocument, messages[resolution])
+    } catch {
+      setPendingImport(null)
+      setFeedback('导入失败，现有方案保持不变')
+    }
+  }, [document, pendingImport, persist])
+
+  const cancelPendingImport = useCallback(() => {
+    setPendingImport(null)
+    setFeedback('已取消导入，现有方案未改动')
+  }, [])
 
   return {
     status,
@@ -184,6 +257,8 @@ export function useWorkspaceViewModel(repository?: WorkspaceRepository): Workspa
     issueCount,
     feedback,
     isPreviewOpen,
+    isPrintSheetOpen,
+    pendingImport,
     selectItem,
     addItem,
     removeItem,
@@ -197,5 +272,11 @@ export function useWorkspaceViewModel(repository?: WorkspaceRepository): Workspa
     deleteCurrentPlan,
     openPreview,
     closePreview,
+    openPrintSheet,
+    closePrintSheet,
+    exportActivePlan,
+    importPlanFile,
+    resolvePendingImport,
+    cancelPendingImport,
   }
 }

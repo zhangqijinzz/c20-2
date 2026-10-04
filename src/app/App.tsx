@@ -1,15 +1,21 @@
-import { Check, Cloud, FileCheck2, PanelTop, TriangleAlert } from 'lucide-react'
+import { useMemo, useRef } from 'react'
+import { Check, Cloud, Download, FileCheck2, PanelTop, Printer, TriangleAlert, Upload } from 'lucide-react'
 import { DEVICE_DEFINITIONS } from '../shared/models'
 import { CanvasStage } from '../features/canvas/components/CanvasStage'
 import { DevicePalette } from '../features/materials/components/DevicePalette'
 import { InspectorPanel } from '../features/inspection/components/InspectorPanel'
 import { PreviewOverlay } from '../features/inspection/components/PreviewOverlay'
+import { PrintSheetOverlay } from '../features/inspection/components/PrintSheetOverlay'
+import { buildConstructionSheet } from '../features/inspection/constructionSheet'
+import { ImportConflictDialog } from '../features/transfer/components/ImportConflictDialog'
 import { PlanSidebar } from '../features/workbench/components/PlanSidebar'
 import { useWorkspaceViewModel } from '../features/workbench/workbenchViewModel'
 
 export function App() {
   const viewModel = useWorkspaceViewModel()
   const { document, activePlan, selectedItem, analysis, issueIds, issueCount } = viewModel
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const constructionSheet = useMemo(() => activePlan ? buildConstructionSheet(activePlan) : null, [activePlan])
 
   if (!document || !activePlan) {
     return <main className="loading-screen"><span className="loading-orb" /><p>正在打开 FocusDesk…</p></main>
@@ -21,7 +27,15 @@ export function App() {
       <section className="app-main">
         <header className="topbar">
           <div className="breadcrumb"><span>工作台</span><span>/</span><strong>{activePlan.name}</strong></div>
-          <div className="topbar-actions"><span className={`save-state ${viewModel.status === 'error' ? 'save-error' : ''}`}><Cloud size={15} /> {viewModel.status === 'saving' ? '保存中…' : viewModel.status === 'error' ? '保存异常' : '已保存到本地'}</span><button className="preview-button" onClick={viewModel.openPreview} type="button"><PanelTop size={16} /> 预览方案</button><span className="avatar">FD</span></div>
+          <div className="topbar-actions">
+            <span className={`save-state ${viewModel.status === 'error' ? 'save-error' : ''}`}><Cloud size={15} /> {viewModel.status === 'saving' ? '保存中…' : viewModel.status === 'error' ? '保存异常' : '已保存到本地'}</span>
+            <button className="preview-button" onClick={viewModel.exportActivePlan} type="button"><Download size={16} /> 导出方案</button>
+            <button className="preview-button" onClick={() => fileInputRef.current?.click()} type="button"><Upload size={16} /> 导入方案</button>
+            <input ref={fileInputRef} accept=".json,application/json" hidden onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) void viewModel.importPlanFile(file); event.currentTarget.value = '' }} type="file" />
+            <button className="preview-button" onClick={viewModel.openPrintSheet} type="button"><Printer size={16} /> 施工清单</button>
+            <button className="preview-button" onClick={viewModel.openPreview} type="button"><PanelTop size={16} /> 预览方案</button>
+            <span className="avatar">FD</span>
+          </div>
         </header>
         <div className="workspace-content">
           <div className="page-heading"><div><span className="eyebrow">DESK PLANNER / {new Date().getFullYear()}</span><h1>把桌面，变成一张清晰的地图。</h1><p>先放置，再调整。每个尺寸与间距都在你的掌控之中。</p></div><div className="feedback-chip"><span className={viewModel.status === 'error' ? 'feedback-icon error' : 'feedback-icon'}>{viewModel.status === 'error' ? <TriangleAlert size={14} /> : <Check size={14} />}</span>{viewModel.feedback}</div></div>
@@ -30,6 +44,8 @@ export function App() {
         </div>
       </section>
       {viewModel.isPreviewOpen && <PreviewOverlay plan={activePlan} analysis={analysis} issueCount={issueCount} onClose={viewModel.closePreview} />}
+      {viewModel.isPrintSheetOpen && constructionSheet && <PrintSheetOverlay sheet={constructionSheet} onClose={viewModel.closePrintSheet} />}
+      {viewModel.pendingImport && <ImportConflictDialog pending={viewModel.pendingImport} onResolve={viewModel.resolvePendingImport} onCancel={viewModel.cancelPendingImport} />}
     </main>
   )
 }
